@@ -20,7 +20,9 @@ jobs:
           coverage: none
 
       - name: Copy Env File
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          echo "FORCE_HTTPS=true" >> .env
 
       - name: Install Composer Dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
