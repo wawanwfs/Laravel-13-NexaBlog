@@ -1,0 +1,84 @@
+name: Run NexaBlog with Live Tunnel (6 Hours)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-and-tunnel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # Automatically shuts down after 6 hours
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: sqlite3, pdo_sqlite, bcmath, ctype, fileinfo, json, mbstring, openssl, xml, zip, filter, hash
+          coverage: none
+
+      - name: Copy Env File
+        run: cp .env.example .env
+
+      - name: Install Composer Dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Setup SQLite Database
+        run: |
+          mkdir -p database
+          touch database/database.sqlite
+
+      - name: Generate App Key
+        run: php artisan key:generate
+
+      - name: Run Migrations & Seeding
+        run: php artisan migrate:fresh --seed --force
+
+      - name: Create Storage Link
+        run: php artisan storage:link
+
+      - name: Start Laravel Server
+        run: php artisan serve --host 127.0.0.1 --port 8000 &
+
+      - name: Install Cloudflare Tunnel (cloudflared)
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb
+
+      - name: Start Cloudflare Tunnel
+        run: |
+          cloudflared tunnel --url http://127.0.0.1:8000 > cloudflared.log 2>&1 &
+          echo "Waiting for Cloudflare Tunnel to generate URL..."
+          for i in {1..15}; do
+            TUNNEL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" cloudflared.log | head -n 1)
+            if [ ! -z "$TUNNEL_URL" ]; then
+              break
+            fi
+            sleep 2
+          done
+          
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "❌ Error: Cloudflare Tunnel failed to start."
+            cat cloudflared.log
+            exit 1
+          fi
+          
+          echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+          echo "### 🌐 NexaBlog Live Tunnel URL" >> $GITHUB_STEP_SUMMARY
+          echo "Your temporary public tunnel URL: **$TUNNEL_URL**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This tunnel will remain active for up to 6 hours before auto-ending." >> $GITHUB_STEP_SUMMARY
+          echo "Credentials for testing:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Superadmin**: \`superadmin@nexablog.com\` / \`password\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Admin**: \`admin@nexablog.com\` / \`password\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **User**: \`user@nexablog.com\` / \`password\`" >> $GITHUB_STEP_SUMMARY
+          echo "Tunnel URL: $TUNNEL_URL"
+
+      - name: Run Tunnel Loop (6 Hours)
+        run: |
+          echo "Workflow is running. Tunnel is active. Waiting for 6 hours..."
+          # Sleep for 5 hours and 55 minutes to allow clean shutdown before runner's 360-minute limit
+          sleep 21300
+          echo "Time limit reached, closing tunnel."
